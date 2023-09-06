@@ -1,10 +1,14 @@
 package main
 
 import (
+	"io/ioutil"
+	"strings"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -56,8 +60,8 @@ func (app *config) makeUI() (*widget.Entry, *widget.RichText) {
 func (app *config) createMenuItems(win fyne.Window) {
 
 	// create three menu items
-	openMenuItems := fyne.NewMenuItem("Open...", func() {})
-	saveMenuItems := fyne.NewMenuItem("Save", func() {})
+	openMenuItems := fyne.NewMenuItem("Open...", app.openFunc(win))
+	saveMenuItems := fyne.NewMenuItem("Save", app.saveFunc(win))
 	app.SaveMenuItem = saveMenuItems
 	app.SaveMenuItem.Disabled = true
 	saveAsMenuItems := fyne.NewMenuItem("Save as...", app.saveAsFunc(win))
@@ -70,6 +74,71 @@ func (app *config) createMenuItems(win fyne.Window) {
 
 	// set the main menu for the application
 	win.SetMainMenu(menu)
+}
+
+// create a filter for ".md" files, So that we can only open/write files with .md extensions.
+// We're going to use this filter with openFunc and saveAsFunc
+var filter = storage.NewExtensionFileFilter([]string{".md", ".MD"})
+
+func (app *config) saveFunc(win fyne.Window) func() {
+	return func() {
+		if app.CurrentFile != nil {
+			write, err := storage.Writer(app.CurrentFile)
+			if err != nil {
+				dialog.ShowError(err, win)
+				return
+			}
+
+			write.Write([]byte(app.EditWidget.Text))
+			defer write.Close()
+		}
+	}
+}
+
+func (app *config) openFunc(win fyne.Window) func() {
+	return func() {
+		// create a dialog box of to open file of type .md
+		openDialog := dialog.NewFileOpen(func(read fyne.URIReadCloser, err error) {
+			if err != nil {
+				// if there is an error. It means we couldn't read the file/filesystem. Show the error and return.
+				dialog.ShowError(err, win)
+				return
+			}
+
+			if read == nil {
+				// user cancelled (clicked on cancel button). User chose not to open the file. So return
+				return
+			}
+
+			defer read.Close()
+
+			// read the file.
+			data, err := ioutil.ReadAll(read)
+			if err != nil {
+				dialog.ShowError(err, win)
+				return
+			}
+
+			// populate the edit widget with the data read from the file.
+			app.EditWidget.SetText(string(data))
+
+			// keep record of the current file.
+			app.CurrentFile = read.URI()
+
+			// update/reset the title of the window to "current window title - The new file name".
+			win.SetTitle(win.Title() + " - " + read.URI().Name())
+
+			// make sure save menu item is enabled
+			app.SaveMenuItem.Disabled = false
+
+		}, win)
+
+		// set the filters so that we are able to open only .md files.
+		openDialog.SetFilter(filter)
+		// now show the dialog
+		openDialog.Show()
+
+	}
 }
 
 func (app *config) saveAsFunc(win fyne.Window) func() {
@@ -85,18 +154,28 @@ func (app *config) saveAsFunc(win fyne.Window) func() {
 				return
 			}
 
+			// check if the file has is .md file or not. If it's not .md then show info to the user
+			if !strings.HasSuffix(strings.ToLower(write.URI().String()), ".md") {
+				dialog.ShowInformation("Error", "Please name your file with a .md extension!", win)
+				return
+			}
+
 			// save the file
 			write.Write([]byte(app.EditWidget.Text))
 			app.CurrentFile = write.URI()
 
 			defer write.Close()
 
-			// reset the title of the window to the "current window tile - The new file name".
+			// reset the title of the window to the "current window title - The new file name".
 			win.SetTitle(win.Title() + " - " + write.URI().Name())
 
 			// enable saveAS menu item
 			app.SaveMenuItem.Disabled = false
 		}, win)
+		// giving default name to the file
+		saveDialog.SetFileName("Untitled.md")
+		// setting filter so that we can write to/save to .md files only.
+		saveDialog.SetFilter(filter)
 		saveDialog.Show()
 	}
 }
